@@ -1,6 +1,10 @@
 #VRML_SIM R2022a utf8
 WorldInfo {
   info [
+    ""
+    ""
+    ""
+    ""
     "Description"
     "Author: first name last name <e-mail>"
     "Date: DD MMM YYYY"
@@ -16,12 +20,24 @@ WorldInfo {
 }
 Viewpoint {
   orientation -0.39829150373757916 0.3361746389753156 0.8534345259949788 1.8931133448225017
-  position 1.2012055188968764 -5.24885748100462 6.5529863689575985
+  position 1.2927022362658411 -5.7858836467086965 7.203049094486903
 }
 Background {
   skyColor [
     0.4 0.7 1
   ]
+}
+DEF Supervisor Robot {
+  children [
+    Receiver {
+      channel 1
+    }
+    Emitter {
+      channel 1
+    }
+  ]
+  controller "supervisor"
+  supervisor TRUE
 }
 DEF short_rock_1 Solid {
   translation -0.456438 -1.17895 0.05
@@ -138,30 +154,60 @@ DEF short_rock_5 Solid {
   name "short brick 5"
   boundingObject USE short_brick_1_geometry
 }
-E-puck {
+DEF EPUCK0 E-puck {
   translation 0.108535 -4.2e-05 0
-  name "e-puck0"
+  name "EPUCK0"
   controller "e-puck"
+  turretSlot [
+    InertialUnit {
+    }
+    GPS {
+    }
+  ]
 }
-E-puck {
+DEF EPUCK1 E-puck {
   translation 1.67853 0.629958 0
-  name "e-puck1"
+  name "EPUCK1"
   controller "e-puck"
+  turretSlot [
+    InertialUnit {
+    }
+    GPS {
+    }
+  ]
 }
-E-puck {
+DEF EPUCK2 E-puck {
   translation -1.48147 1.68996 0
-  name "e-puck2"
+  name "EPUCK2"
   controller "e-puck"
+  turretSlot [
+    InertialUnit {
+    }
+    GPS {
+    }
+  ]
 }
-E-puck {
+DEF EPUCK3 E-puck {
   translation -1.81147 -0.04004 0
-  name "e-puck3"
+  name "EPUCK3"
   controller "e-puck"
+  turretSlot [
+    InertialUnit {
+    }
+    GPS {
+    }
+  ]
 }
-E-puck {
+DEF EPUCK4 E-puck {
   translation 1.36853 -1.86004 0
-  name "e-puck4"
+  name "EPUCK4"
   controller "e-puck"
+  turretSlot [
+    InertialUnit {
+    }
+    GPS {
+    }
+  ]
 }
 RectangleArena {
   floorSize 4 4
@@ -179,7 +225,7 @@ PointLight {
   intensity 7
   location -1 -1 2
 }
-Solid {
+DEF PATROL0 Solid {
   translation 0 0 0.1
   children [
     Shape {
@@ -197,7 +243,7 @@ Solid {
   name "food0"
   boundingObject USE food0_geometry
 }
-Solid {
+DEF PATROL1 Solid {
   translation 1.6 0.75 0.1
   children [
     Shape {
@@ -215,7 +261,7 @@ Solid {
   name "food1"
   boundingObject USE food0_geometry
 }
-Solid {
+DEF PATROL2 Solid {
   translation -1.7 0 0.1
   children [
     Shape {
@@ -233,7 +279,7 @@ Solid {
   name "food2"
   boundingObject USE food0_geometry
 }
-Solid {
+DEF PATROL3 Solid {
   translation -1.5 1.6 0.1
   children [
     Shape {
@@ -251,7 +297,7 @@ Solid {
   name "food3"
   boundingObject USE food0_geometry
 }
-Solid {
+DEF PATROL4 Solid {
   translation 1.3 -1.8 0.1
   children [
     Shape {
