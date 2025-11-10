@@ -1,0 +1,14 @@
+Webots Project File version R2022a
+perspectives: 000000ff00000000fd00000002000000010000011c00000215fc0200000001fb0000001400540065007800740045006400690074006f00720000000016000002150000008700ffffff00000003000003be00000084fc0100000001fb0000001a0043006f006e0073006f006c00650041006c006c0041006c006c030000000200000195000003be00000084000003be0000021500000001000000020000000100000008fc00000000
+simulationViewPerspectives: 000000ff000000010000000200000100000001a00100000002010000000100
+sceneTreePerspectives: 000000ff0000000100000002000000c0000000fa0100000002010000000200
+maximizedDockId: -1
+centralWidgetVisible: 1
+orthographicViewHeight: 1
+textFiles: 1 "controllers/e-puck/e-puck.c" "controllers/supervisor/supervisor.c"
+consoles: Console:All:All
+renderingDevicePerspectives: EPUCK0:camera;1;1;0;0
+renderingDevicePerspectives: EPUCK1:camera;1;1;0;0
+renderingDevicePerspectives: EPUCK2:camera;1;1;0;0
+renderingDevicePerspectives: EPUCK3:camera;1;1;0;0
+renderingDevicePerspectives: EPUCK4:camera;1;1;0;0

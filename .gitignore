@@ -11,6 +11,9 @@
 /build/
 /bin/
 
+# Old local copy
+/project_code/
+
 # Linker output
 *.ilk
 *.map
