@@ -7,6 +7,10 @@
 *.obj
 *.elf
 
+# Build artifacts
+/build/
+/bin/
+
 # Linker output
 *.ilk
 *.map
