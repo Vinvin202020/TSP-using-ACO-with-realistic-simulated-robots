@@ -114,7 +114,7 @@ static void roi_hsv(double *H, double *S, double *V) {
   const unsigned char *img = wb_camera_get_image(cam);
   int cx = cam_w/2, cy = (3*cam_h)/4, half = 7; // fenetre a observer
   double Hsum=0, Ssum=0, Vsum=0; int count=1;  // faux de 1 mais balec
-  const double RGB_SUM_MIN = 0.02; // ~ 0.02 par canal (sur [0..1])
+  //const double RGB_SUM_MIN = 0.02; // ~ 0.02 par canal (sur [0..1])
   const double V_BLACK     = 0.08; // pixels trop sombres => skip
   
   for (int y=cy-half; y<=cy+half; ++y)
@@ -159,73 +159,11 @@ static int color_arrived() {
 
   // 3) règles robustes (H en degrés, S,V en [0..1])
   int ok = 0;
-
-  // 3.a) garde-fous globaux (on ne décide pas dans le quasi-noir ou quasi-gris sombre)
-  if (0) {                     // trop sombre -> H et S peu fiables, v < 0.12
-    ok = 0;
-  } else if (0) {  // très peu saturé ET pas lumineux -> éviter faux positifs, s < 0.08 && v < 0.60
-    ok = 0;
-  } else {
-    // 3.b) détection "blanc" (S faible, V haut) indépendante du H
-    //     Détecte blanc si la cible est blanche OU si la cible a S très faible.
-    int target_is_white = (sr < 0.20 && vr > 0.85);
-    if (target_is_white) {
-      if (s < 0.20 && (h<10 || h>300)) ok = 1;  // && v > 0.70 
-    }
-    // 3.c) teintes spécifiques si la cible n'est pas "blanc"
-    if (!ok && !target_is_white) {
-
-      // bornes de tolérance (en degrés) – ajuste ±2..3° si besoin
-      const double TOL_RED   = 20.0;
-      const double TOL_YELL  = 10.0;
-      const double TOL_CYAN  = 16.0;
-      const double TOL_GREEN = 20.0;
-      const double TOL_GEN   = 18.0;
-
-      // repères de teinte
-      const double H_RED0  = 0.0;    // 0/360
-      const double H_YELL  = 60.0;
-      const double H_GREEN = 120.0;
-      const double H_CYAN  = 216.0;  // 200–210 selon rendu
-
-      // --- JAUNE (1,1,0) ---
-      if (hue_dist(hr, H_YELL) < TOL_YELL) {
-        if (hue_dist(h, H_YELL) < (TOL_YELL)) //  && s > 0.55 && v > 0.35
-          ok = 1;
-      }
-      // --- ROUGE (1,0,0) ---
-      else if (hue_dist(hr, H_RED0) < TOL_RED) {  // || hue_dist(hr, 360.0) < TOL_RED
-        // printf("[R%d] h=%f, s=%f, v=%f\n", my_id, h, s, v);
-        if ((hue_dist(h, H_RED0) < (TOL_RED))) // || hue_dist(h, 360.0) < (TOL_RED+2.0))&& s > 0.35 && v > 0.28
-           ok = 1;
-      }
-      // --- BLEU (0,0.333,1) ---
-      else if (hue_dist(hr, H_CYAN) < (TOL_CYAN)) {
-        if (hue_dist(h, H_CYAN) < (TOL_CYAN))  //  && s > 0.45 && v > 0.50
-          ok = 1;
-      }
-      // --- VERT (0,0.333,0) ---
-      // cible typique : hr≈120°, sr élevé, vr bas (~0.3). On impose une fenêtre de V basse à moyenne.
-      else if (hue_dist(hr, H_GREEN) < TOL_GREEN) {
-        if (hue_dist(h, H_GREEN) < (TOL_GREEN))  //  && s > 0.40 && v > 0.15 && v < 0.55
-          ok = 1;
-      }
-      // --- CAS GÉNÉRIQUE (autres couleurs) ---
-      if (!ok) {
-        // Adaptation douce aux caractéristiques de la cible :
-        // - saturation requise : au moins 0.28, ou 90% de la saturation cible (si cible peu saturée)
-        double s_min = fmin(0.35, 0.90 * sr + 0.05);
-        if (s_min < 0.28) s_min = 0.28;
-
-        // - luminosité requise : éviter l'ombre, mais rester compatible avec cibles peu lumineuses
-        double v_min = fmin(0.55, 0.90 * vr + 0.10);
-        if (v_min < 0.20) v_min = 0.20;
-
-        if (hue_dist(h, hr) < TOL_GEN && s > s_min && v > v_min)
-          ok = 1;
-      }
-    }
-  }
+  const double TOL_GEN   = 18.0;
+  
+  if (!ok) {
+    if (hue_dist(h, hr) < TOL_GEN) //  && s > s_min && v > v_min
+      ok = 1;}
 
   // 4) stabilité temporelle
   if (ok) {
@@ -236,8 +174,6 @@ static int color_arrived() {
 	return 0;
   }
 }
-
-
 // COULEUR
 
 
@@ -348,10 +284,10 @@ int main() {
     
 	// 3) Échelle d’évitement (portée globale à la boucle)
 	double avoid_scale = 1.0;
-	if (has_target) {
-  	if (dist < 0.30) avoid_scale = 0.50;  // adoucir pres du patrol pour detecter la couleur
-  	if (dist < 0.20) avoid_scale = 0.25;  // encore un peu d’IR pour les côtés
-	}
+	//if (has_target) {
+  	//if (dist < 0.30) avoid_scale = 0.50;  // adoucir pres du patrol pour detecter la couleur
+  	//if (dist < 0.20) avoid_scale = 0.25;  // encore un peu d’IR pour les côtés
+	//}
  
 	// 4) Vitesses de base
 	double vL = BASE_SPEED, vR = BASE_SPEED;
