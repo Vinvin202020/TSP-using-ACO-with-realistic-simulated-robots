@@ -33,7 +33,7 @@ double uniform(double a, double b)
 // Must provide true probabilities, i.e. sum(probs[0:n_patrols]) == 1.0
 int custom_sampler(const double* probs, int n_patrols)
 {
-	double rng= (double)rand()/(double)(RAND_MAX + 1);
+	double rng= (double)rand()/(double)(RAND_MAX);
 	//+ 1 here to avoid the possibility for rng to be equal to one,
 	//because if rng is equal to 1, floating point errors could lead 
 	//sum to never reach 1 after the for loop which would wrek havoc
@@ -206,13 +206,18 @@ Tour run_tour(int n_robots, int n_patrols, const double* patrol_x, const double*
 			while ((wb_robot_step(TIME_STEP) != -1) && (num_finished < n_robots)){
 				while (wb_receiver_get_queue_length(receiver) > 0){
 					const char *msg = wb_receiver_get_data(receiver);
-					wb_receiver_next_packet(receiver);
+					
 					int r_id;
-					int p_id;
-					if (sscanf(msg, "%d %d", &r_id, &p_id) == 2){
+					int p_id; // Current patrolled point
+					int lp_id; // Last patrolled point
+					double travel_time;
+					//printf("%d\n", num_finished);
+					if (sscanf(msg, "%d %d %d %lf", &r_id, &p_id, &lp_id, &travel_time) == 4){
+				
 						add_city(&r_tours[r_id], d_table, p_id, n_patrols);
 						num_finished++;
 					}
+					wb_receiver_next_packet(receiver);
 				}
 			}
 		}else{
@@ -231,13 +236,17 @@ Tour run_tour(int n_robots, int n_patrols, const double* patrol_x, const double*
 			while ((wb_robot_step(TIME_STEP) != -1) && (num_finished < n_robots)){
 				while (wb_receiver_get_queue_length(receiver) > 0){
 					const char *msg = wb_receiver_get_data(receiver);
-					wb_receiver_next_packet(receiver);
+					
 					int r_id;
-					int p_id;
-					if (sscanf(msg, "%d %d", &r_id, &p_id) == 2){
+					int p_id; // Current patrolled point
+					int lp_id; // Last patrolled point
+					double travel_time;
+					
+					if (sscanf(msg, "%d %d %d %lf", &r_id, &p_id, &lp_id, &travel_time) == 4){
 						add_city(&r_tours[r_id], d_table, p_id, n_patrols); // adding the last step to the robots tour
 						num_finished++;
 					}
+					wb_receiver_next_packet(receiver);
 				}
 			}
 		}
@@ -381,6 +390,113 @@ double brute_force_5_nodes_solution(const double* d_table, int n_patrols, int* b
 	}
     return best_length;
 }
+
+void fill_distance_table(double* d_table, int n_patrols, int n_robots,
+                         const double* patrol_x, const double* patrol_y,
+                         const int* start_pos){
+  // How many arrivals we want to record in total
+  const int MAX_SAMPLES = 200;
+
+  // Accumulated travel times and counts for each (i,j)
+  double sum_times[n_patrols][n_patrols];
+  int counts[n_patrols][n_patrols];
+
+  // Initialize accumulators
+  for (int i = 0; i < n_patrols; ++i) {
+    for (int j = 0; j < n_patrols; ++j) {
+      sum_times[i][j] = 0.0;
+      counts[i][j] = 0;
+      d_table[i * n_patrols + j] = 0.0;  // clear d_table; we will fill later
+    }
+  }
+
+  // For each robot, send it to an initial random patrol that is NOT its start_pos
+  for (int r = 0; r < n_robots; ++r) {
+    int from = start_pos[r];
+    int to;
+
+    do {
+      to = rand() % n_patrols;
+    } while (to == from);  // ensure destination != current node
+
+    char msg[100];
+    snprintf(msg, sizeof(msg), "%d %.3f %.3f %d",
+             r, patrol_x[to], patrol_y[to], to);
+    wb_emitter_send(emitter, msg, strlen(msg) + 1);
+  }
+
+  int samples = 0;
+
+  // Main loop: wait for robots to arrive and keep sending them to new random patrols
+  while (wb_robot_step(TIME_STEP) != -1 && samples < MAX_SAMPLES) {
+    while (wb_receiver_get_queue_length(receiver) > 0 && samples < MAX_SAMPLES) {
+      const char *msg = wb_receiver_get_data(receiver);
+
+      int r_id;
+      int p_id;   // current patrol reached
+      int lp_id;  // last patrol
+      double travel_time;
+
+      // Robot sends: "<r_id> <p_id> <lp_id> <travel_time>"
+      if (sscanf(msg, "%d %d %d %lf", &r_id, &p_id, &lp_id, &travel_time) == 4) {
+        // Sanity checks
+        if (r_id >= 0 && r_id < n_robots &&
+            p_id >= 0 && p_id < n_patrols &&
+            lp_id >= 0 && lp_id < n_patrols &&
+            p_id != lp_id) {
+
+          // Accumulate time for edge lp_id -> p_id
+          sum_times[lp_id][p_id] += travel_time;
+          counts[lp_id][p_id] += 1;
+
+          // If you want symmetric distances, also accumulate the reverse:
+          sum_times[p_id][lp_id] += travel_time;
+          counts[p_id][lp_id] += 1;
+
+          samples++;
+        }
+
+        // Now send this robot to a NEW random patrol != current p_id
+        int next_p;
+        do {
+          next_p = rand() % n_patrols;
+        } while (next_p == p_id);  // don't send to the same node it is on
+
+        char out[100];
+        snprintf(out, sizeof(out), "%d %.3f %.3f %d",
+                 r_id, patrol_x[next_p], patrol_y[next_p], next_p);
+        wb_emitter_send(emitter, out, strlen(out) + 1);
+      }
+
+      wb_receiver_next_packet(receiver);
+    }
+  }
+
+  // Convert accumulated times into averaged "distances" for d_table
+  // and invert them to follow the 1/dist convention (now 1/time).
+  for (int i = 0; i < n_patrols; ++i) {
+    for (int j = 0; j < n_patrols; ++j) {
+      if (i == j) {
+        d_table[i * n_patrols + j] = 0.0;
+        continue;
+      }
+
+      if (counts[i][j] > 0) {
+        double avg_time = sum_times[i][j] / (double)counts[i][j];
+        // store 1 / avg_time, as per your "1/dist" convention
+        d_table[i * n_patrols + j] = (avg_time > 0.0) ? 1.0 / avg_time : 0.0;
+      } else {
+        // No samples for this edge -> you can choose a default.
+        // Here we leave it at 0; alternatively, use a small value.
+        d_table[i * n_patrols + j] = 0.0;
+      }
+    }
+  }
+
+  printf("[SUP] Distance table filled using %d samples.\n", samples);
+}
+
+
 int main() 
 {
 	int n_robots, n_patrols;
@@ -391,11 +507,9 @@ int main()
 
 	double d_table[n_patrols*n_patrols]; //distance table (for optimization purposes, each dist is assumed to be stored inverted i.e. 1/dist)
 	double pher_table[n_patrols*n_patrols]; //pheromone table
-
+	
+	
 	init_edge_tables(d_table, pher_table, n_patrols);
-
-	printf("[SUP] Distance table:\n");
-	print_edge_table(d_table, n_patrols);
 
 	printf("[SUP] Initial pheromone table:\n");
 	print_edge_table(pher_table, n_patrols);
@@ -404,6 +518,9 @@ int main()
 	int start_pos[n_robots];
 	compute_start_pos(patrol_x, patrol_y, robots_x, robots_y, start_pos, n_robots, n_patrols);
 
+           fill_distance_table(d_table, n_patrols, n_robots, patrol_x, patrol_y, start_pos);
+           print_edge_table(d_table, n_patrols);
+           
 	// list of the accessibility of the cities for each robot, 
 	// evolves during each tour and is then reset at the end of a tour
 	Tour robots_tours[n_robots];

@@ -27,8 +27,12 @@ static WbDeviceTag emitter, receiver;
 
 static int my_id = -1;
 static int target_patrol = -1;
+static int last_patrol = -1;
 static int has_target = 0;
 static double tx = 0.0, ty = 0.0; // CIBLE dans le plan X–Y
+static double start_time = 0;
+static double end_time = 0;
+static double travel_time = 0;
 
 // Braitenberg
 static const double BASE_SPEED = 5;
@@ -54,6 +58,7 @@ static void parse_supervisor_msg(const char *msg) {
   if (sscanf(msg, "%d %lf %lf %d", &id, &x, &y, &pid) == 4) {
     if (id == my_id) {
       tx = x; ty = y; target_patrol = pid; has_target = 1;
+      start_time = wb_robot_get_time();
 	  if (VERBOSE_BOTS){
       	printf("[R%d] Target set: (%.3f, %.3f), patrol=%d\n", my_id, tx, ty, target_patrol);
 	  }
@@ -165,13 +170,16 @@ void go_to_patrol(double* vL, double* vR)
 		if (dist < ARRIVE_EPS) {
 			char msg[64];
 			//format of robot to supervisor messages: <r_id> <p_id>
-			snprintf(msg, sizeof(msg), "%d %d", my_id, target_patrol);
+			end_time = wb_robot_get_time();
+			travel_time = end_time - start_time;
+			snprintf(msg, sizeof(msg), "%d %d %d %lf", my_id, target_patrol, last_patrol, travel_time);
 			wb_emitter_send(emitter, msg, strlen(msg) + 1);
 			if (VERBOSE_BOTS){
 				printf("[R%d] %s\n", my_id, msg);
 			}
 			has_target = 0;
 			*vL = *vR = 0.0;
+			last_patrol = target_patrol;
 		}
 	}
 }
