@@ -306,11 +306,11 @@ void go_to_patrol(double* vL, double* vR, const double* rgbs)
 		*vR += fwd + omega;
 		
 		if (dist <0.20){
-            	  if (dist < 0.15){
-                          *vL = 2;
-                          *vR = -2;
-                        }
-                        if (color_arrived(rgbs)) {
+            	if (dist < 0.15){
+                	*vL = 2;
+                    *vR = -2;
+                }
+                if (color_arrived(rgbs)) {
           			char msg[64];
           			//format of robot to supervisor messages: <r_id> <p_id>
           			end_time = wb_robot_get_time();
@@ -323,7 +323,7 @@ void go_to_patrol(double* vL, double* vR, const double* rgbs)
           			has_target = false;
           			*vL = *vR = 0.0;
           			last_patrol = target_patrol;
-          		  }
+          		}
 		}
 	}
 }
