@@ -19,8 +19,8 @@ WorldInfo {
   ]
 }
 Viewpoint {
-  orientation -0.39829150373757916 0.3361746389753156 0.8534345259949788 1.8931133448225017
-  position 1.2927022362658411 -5.7858836467086965 7.203049094486903
+  orientation -0.40342426288313377 0.32317551758821317 0.8560411490978634 1.93939226383834
+  position 1.024061857379765 -4.722990493983046 6.64866922051909
 }
 Background {
   skyColor [
@@ -217,13 +217,28 @@ RectangleArena {
 }
 PointLight {
   attenuation 0 0 1
-  intensity 7
-  location 1 1 2
+  intensity 4
+  location 1.4 1.3 2
 }
 PointLight {
   attenuation 0 0 1
-  intensity 7
-  location -1 -1 2
+  intensity 4
+  location -1.3 -1.3 2
+}
+PointLight {
+  attenuation 0 0 1
+  intensity 5
+  location 0 0 2
+}
+PointLight {
+  attenuation 0 0 1
+  intensity 5
+  location 1 -1 2
+}
+PointLight {
+  attenuation 0 0 1
+  intensity 5
+  location -1 1 2
 }
 DEF PATROL0 Solid {
   translation 0 0 0.1
