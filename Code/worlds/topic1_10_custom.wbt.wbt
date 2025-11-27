@@ -19,8 +19,8 @@ WorldInfo {
   ]
 }
 Viewpoint {
-  orientation -0.5696135337758913 0.5753383904106635 0.5869635070930802 2.0712876470396457
-  position 0.007222695037946203 -0.10938417775892662 7.4653287149647785
+  orientation -0.5376468081520485 0.5369754868279107 0.6500717162204818 1.9898882201084611
+  position 0.5006124499005208 -1.9108426269345185 9.540170150832802
 }
 Background {
   skyColor [
@@ -40,7 +40,7 @@ DEF Supervisor Robot {
   supervisor TRUE
 }
 DEF short_rock_1 Solid {
-  translation -0.456438 -1.17895 0.05
+  translation -0.13899 -1.27139 0.05
   rotation 0 0 1 5.36782
   children [
     Shape {
@@ -63,7 +63,7 @@ DEF short_rock_1 Solid {
   boundingObject USE short_brick_1_geometry
 }
 DEF short_rock_2 Solid {
-  translation 0.527376 1.25925 0.05
+  translation 0.734274 1.26846 0.05
   rotation 0 0 1 4.96782
   children [
     Shape {
@@ -152,29 +152,6 @@ DEF short_rock_3 Solid {
     }
   ]
   name "short brick 3(6)"
-  boundingObject USE short_brick_1_geometry
-}
-DEF short_rock_3 Solid {
-  translation -0.190132 1.28528 0.05
-  rotation 0 0 -1 -0.6554353071795864
-  children [
-    Shape {
-      appearance Appearance {
-        material Material {
-          diffuseColor 1 1 1
-        }
-        texture ImageTexture {
-          url [
-            "textures/stone-2.png"
-          ]
-        }
-      }
-      geometry DEF short_brick_1_geometry Box {
-        size 0.1 0.3 0.1
-      }
-    }
-  ]
-  name "short brick 3(7)"
   boundingObject USE short_brick_1_geometry
 }
 DEF short_rock_3 Solid {
@@ -293,7 +270,7 @@ DEF short_rock_3 Solid {
   boundingObject USE short_brick_1_geometry
 }
 DEF short_rock_4 Solid {
-  translation -1.1021 -0.00580412 0.05
+  translation -1.11295 0.0806699 0.05
   rotation 0 0 -1 1.96256
   children [
     Shape {
@@ -454,8 +431,8 @@ DEF short_rock_4 Solid {
   boundingObject USE short_brick_1_geometry
 }
 DEF short_rock_5 Solid {
-  translation -0.883016 1.07481 0.05
-  rotation 0 0 1 5.36782
+  translation -0.689879 1.18403 0.05
+  rotation 0 0 -1 1.70076
   children [
     Shape {
       appearance Appearance {
@@ -634,7 +611,7 @@ DEF EPUCK7 E-puck {
   ]
 }
 DEF EPUCK8 E-puck {
-  translation 1.35283 -0.461548 0
+  translation 1.28794 -0.332288 0
   name "EPUCK8"
   controller "e-puck"
   turretSlot [
@@ -800,7 +777,7 @@ DEF PATROL6 Solid {
     Shape {
       appearance Appearance {
         material Material {
-          diffuseColor 1 0.33 0.66
+          diffuseColor 0.66 0 0.33
         }
       }
       geometry Cylinder {
