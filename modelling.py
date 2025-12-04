@@ -31,7 +31,7 @@ def run_micro_sim(N0, p_obs, p_pat, T_obs, num_iter= 200, seed= None):
 			robots_states= np.zeros(N0)
 	return counts_activ, counts_obs, partols_reached
 
-N0= 5
+N0= 2000
 p_obs= 0.05
 p_pat= 0.7
 T_obs= 5

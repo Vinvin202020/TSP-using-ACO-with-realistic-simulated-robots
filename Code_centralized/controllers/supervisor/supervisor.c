@@ -17,7 +17,7 @@
 #define MAX_PATROLS 	100
 
 //Distance computation parameters
-#define NUM_SAMPLES		50 //how many times we want to compute d_ij before we average it.
+#define NUM_SAMPLES		300 //how many times we want to compute d_ij before we average it.
 
 //ACS parameter
 #define NUM_ITER		3	//how many iteration of ACS to perform
@@ -30,6 +30,7 @@
 #define VERBOSE_TOURS	0   //whether to print the tours performed by each robot or not
 #define VERBOSE_SAMPLES 1   //whether to print progress during sampling phase of the dist table computation
 #define VERBOSE_PHER	0	//whether to print pher table after each iteration
+#define VERBOSE_SAVE_CSV_PHER 1 //whether to save the tables in a csv
 
 static WbDeviceTag emitter, receiver;
 static double L_NN= 0.0; //tour length produced by the nearest neighbor heuristic which will be computed
@@ -204,7 +205,6 @@ int load_info_nodes(double* x_array, double* y_array, double* rgb_array, const c
 		rgb_array[i*3 + 1]= rgb[1];
 		rgb_array[i*3 + 2]= rgb[2];
 		++counter;
-		printf("[SUP] RGB couple of node %d: %.3f, %.3f, %.3f\n", i, rgb_array[i*3], rgb_array[i*3+1], rgb_array[i*3 + 2]);
 	}
 	return counter;
 }
@@ -527,9 +527,9 @@ void fill_distance_table(double* d_table, int n_patrols, int n_robots,
 				// No samples for this edge, if i==j, this is fine, else fallback is to assign 0
 				if (i != j){
 					printf("[SUP] Edge %d->%d was never sampled for distance computation.\n", i, j);
-					printf("[SUP] Setting its inverted distance to 0 as a fallback.\n");
+					printf("[SUP] Setting its inverted distance to 1e-8 as a fallback.\n");
 				}
-				*at_edges(d_table, i, j , n_patrols) = 0.0;
+				*at_edges(d_table, i, j , n_patrols) = 1e-8;
 			}
 		}
 	}
@@ -676,11 +676,110 @@ double brute_force_5_nodes_solution(double* d_table, int n_patrols, int* best_pa
     return best_length;
 }
 
+double brute_force_10_nodes_solution(double* d_table, int n_patrols, int* best_path)
+{
+    int test_path[n_patrols + 1];
+    test_path[0] = 0;  // Le chemin commence par le premier nœud (0)
+    test_path[n_patrols] = 0;  // Le chemin se termine également par le premier nœud (0)
+
+    double best_length = DBL_MAX;  // Initialisation de la meilleure longueur avec la valeur maximale possible
+
+    // Boucles imbriquées pour générer toutes les permutations des nœuds
+    for (int i = 1; i < n_patrols; ++i) {
+        test_path[1] = i;
+        for (int j = 1; j < n_patrols; ++j) {
+            if (i != j) {
+                test_path[2] = j;
+                for (int k = 1; k < n_patrols; ++k) {
+                    if ((k != i) && (k != j)) {
+                        test_path[3] = k;
+                        for (int l = 1; l < n_patrols; ++l) {
+                            if ((l != i) && (l != j) && (l != k)) {
+                                test_path[4] = l;
+                                for (int m = 1; m < n_patrols; ++m) {
+                                    if ((m != i) && (m != j) && (m != k) && (m != l)) {
+                                        test_path[5] = m;
+                                        for (int n = 1; n < n_patrols; ++n) {
+                                            if ((n != i) && (n != j) && (n != k) && (n != l) && (n != m)) {
+                                                test_path[6] = n;
+                                                for (int o = 1; o < n_patrols; ++o) {
+                                                    if ((o != i) && (o != j) && (o != k) && (o != l) && (o != m) && (o != n)) {
+                                                        test_path[7] = o;
+                                                        for (int p = 1; p < n_patrols; ++p) {
+                                                            if ((p != i) && (p != j) && (p != k) && (p != l) && (p != m) && (p != n) && (p != o)) {
+                                                                test_path[8] = p;
+                                                                for (int q = 1; q < n_patrols; ++q) {
+                                                                    if ((q != i) && (q != j) && (q != k) && (q != l) && (q != m) && (q != n) && (q != o) && (q != p)) {
+                                                                        test_path[9] = q;
+                                                                        // Maintenant, nous avons testé une permutation complète de 10 nœuds
+                                                                        double test_length = compute_length_path(d_table, test_path, n_patrols);
+                                                                        if (test_length < best_length) {
+                                                                            best_length = test_length;
+                                                                            memcpy(best_path, test_path, (n_patrols + 1) * sizeof(int));
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return best_length;
+}
+
 void terminate_robots_controller(){
 	// Supervisor sends: "STOP"
 	char msg[10];
 	snprintf(msg, sizeof(msg), "%s", "STOP");
 	wb_emitter_send(emitter, msg, strlen(msg) + 1);
+}
+
+void save_pheromone_history(double pher_table_hist[NUM_ITER+1][MAX_PATROLS][MAX_PATROLS], int n_patrols, double* patrol_x, double* patrol_y) {
+    FILE *file = fopen("pheromone_history.csv", "w");
+    if (file == NULL) {
+        printf("Error opening file for writing: pheromone_history.csv\n");
+        return;
+    }
+    // Print the patrol positions
+    for (int i=0; i<n_patrols; i++){
+        fprintf(file, "%.6f", patrol_x[i]);
+        if (i < n_patrols - 1) {
+            fprintf(file, ",");
+        }
+    }
+    fprintf(file, "\n");
+    for (int i=0; i<n_patrols; i++){
+        fprintf(file, "%.6f", patrol_y[i]);
+        if (i < n_patrols - 1) {
+            fprintf(file, ",");
+        }
+        
+    }
+    fprintf(file, "\n");
+    // Print the pheromone tables
+    for (int iter = 0; iter <= NUM_ITER; ++iter) {
+        for (int i = 0; i < n_patrols; ++i) {
+            for (int j = 0; j < n_patrols; ++j) {
+                fprintf(file, "%.6f", pher_table_hist[iter][i][j]);
+                if (j < n_patrols - 1) {
+                    fprintf(file, ",");
+                }
+            }
+            fprintf(file, "\n");
+        }
+    }
+    fclose(file);
+    printf("[SUP] Pheromone history saved to: pheromone_history.csv\n");
 }
 
 int main() 
@@ -693,6 +792,7 @@ int main()
 
 	double d_table[n_patrols*n_patrols]; //distance table (for optimization purposes, each dist is assumed to be stored inverted i.e. 1/dist)
 	double pher_table[n_patrols*n_patrols]; //pheromone table
+	double pher_table_hist[NUM_ITER+1][MAX_PATROLS][MAX_PATROLS];
 
 	// list of the starting nodes for each robot (will not change during tours since tours must be cyclic)
 	int start_pos[n_robots];
@@ -700,6 +800,12 @@ int main()
            
 	init_edge_tables(d_table, pher_table, patrol_x, patrol_y, start_pos, n_robots, n_patrols);
 
+           for (int j = 0; j < n_patrols; j++) {
+                          for (int k = 0; k < n_patrols; k++) {
+                            pher_table_hist[0][j][k] = pher_table[j * n_patrols + k];
+                          }
+                      }
+           
 	printf("[SUP] Inverted distance table:\n");
 	print_edge_table(d_table, n_patrols);
 	printf("\n");
@@ -745,6 +851,13 @@ int main()
 			printf("[SUP] Updated pheromone table:\n");
 			print_edge_table(pher_table, n_patrols);
 		}
+		if (VERBOSE_SAVE_CSV_PHER){
+  		   for (int j = 0; j < n_patrols; j++) {
+                            for (int k = 0; k < n_patrols; k++) {
+                              pher_table_hist[i+1][j][k] = pher_table[j * n_patrols + k];
+                            }
+                         }
+                      }
 	}
 	terminate_robots_controller();
 
@@ -754,9 +867,15 @@ int main()
 	}
 	printf(" of length: %.3f.\n", overall_best_tour.length);
 
-	if (n_patrols == 5){
+	if ((n_patrols == 5)||(n_patrols == 10)){
 		int optimal_path[n_patrols + 1];
-		double optimal_length= brute_force_5_nodes_solution(d_table, n_patrols, optimal_path);
+		double optimal_length ;
+		if (n_patrols == 5){
+            optimal_length = brute_force_5_nodes_solution(d_table, n_patrols, optimal_path);
+        }else{
+            optimal_length = brute_force_10_nodes_solution(d_table, n_patrols, optimal_path);
+        }
+                        
 		printf("[SUP] The optimal tour has length: %.3f\n", optimal_length);
 		printf("[SUP] The optimal path is: %d", optimal_path[0]);
 		for (int i= 1; i < overall_best_tour.num_patrols; ++i){
@@ -764,9 +883,12 @@ int main()
 		}
 		printf("\n");
 	}
-
+	if (VERBOSE_SAVE_CSV_PHER){
+    	save_pheromone_history(pher_table_hist, n_patrols, patrol_x, patrol_y);
+    }
 	wb_robot_cleanup();
 	return 0;
 }
+
 
 

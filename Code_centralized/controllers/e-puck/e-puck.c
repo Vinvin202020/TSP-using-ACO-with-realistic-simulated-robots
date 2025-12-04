@@ -44,7 +44,7 @@ static bool in_progress= true;
 static int cam_w, cam_h;
 static int color_hits= 0;
 static const double TOL_GEN= 10.0;
-static int consistency= 5;
+static int consistency= 4;
 
 // Braitenberg
 static const double BASE_SPEED = 5;
@@ -161,9 +161,11 @@ void read_rgb_list(double* rgbs, const char* msg, int n_patrols)
 			++slider;
 		}
 	}
-	if (my_id == 0){
-		for (int i= 0; i < n_patrols; ++i){
-			printf("[ROB] RGB couple of node %d: %.3f, %.3f, %.3f\n", i, rgbs[i*3], rgbs[i*3+1], rgbs[i*3 + 2]);
+	if (VERBOSE_BOTS){
+		if (my_id == 0){
+			for (int i= 0; i < n_patrols; ++i){
+				printf("[ROB] RGB couple of node %d: %.3f, %.3f, %.3f\n", i, rgbs[i*3], rgbs[i*3+1], rgbs[i*3 + 2]);
+			}
 		}
 	}
 }
@@ -270,7 +272,6 @@ void receive_patrol()
 void braitenberg_dodging(double* vL, double* vR)
 {
 	const double *p = wb_gps_get_values(gps);                // [x, y, z]
-	const double *r = wb_inertial_unit_get_roll_pitch_yaw(imu);
 	double x = p[0], y = p[1]; 
 	double dx = tx - x, dy = ty - y;
 	double dist = sqrt(dx*dx + dy*dy);
@@ -304,21 +305,26 @@ void go_to_patrol(double* vL, double* vR, const double* rgbs)
 
 		*vL += fwd - omega;
 		*vR += fwd + omega;
-
-		if (color_arrived(rgbs)) {
-		//if (dist < 0.1){
-			char msg[64];
-			//format of robot to supervisor messages: <r_id> <p_id>
-			end_time = wb_robot_get_time();
-			travel_time = end_time - start_time;
-			snprintf(msg, sizeof(msg), "%d %d %d %lf", my_id, target_patrol, last_patrol, travel_time);
-			wb_emitter_send(emitter, msg, strlen(msg) + 1);
-			if (VERBOSE_BOTS){
-				printf("[R%d] %s\n", my_id, msg);
-			}
-			has_target = false;
-			*vL = *vR = 0.0;
-			last_patrol = target_patrol;
+		
+		if (dist <0.20){
+            	if (dist < 0.15){
+                	*vL = 2;
+                    *vR = -2;
+                }
+                if (color_arrived(rgbs)) {
+          			char msg[64];
+          			//format of robot to supervisor messages: <r_id> <p_id>
+          			end_time = wb_robot_get_time();
+          			travel_time = end_time - start_time;
+          			snprintf(msg, sizeof(msg), "%d %d %d %lf", my_id, target_patrol, last_patrol, travel_time);
+          			wb_emitter_send(emitter, msg, strlen(msg) + 1);
+          			if (VERBOSE_BOTS){
+          				printf("[R%d] %s\n", my_id, msg);
+          			}
+          			has_target = false;
+          			*vL = *vR = 0.0;
+          			last_patrol = target_patrol;
+          		}
 		}
 	}
 }
