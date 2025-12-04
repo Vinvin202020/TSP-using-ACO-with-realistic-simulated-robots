@@ -1,4 +1,4 @@
-filename = ['pheromone_history100_4.csv'];
+filename = 'pheromone_history_2.csv';
 
 data = readmatrix(filename);
 
