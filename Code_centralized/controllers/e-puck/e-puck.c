@@ -23,6 +23,8 @@
 // tolerance pour l'arrivee. a enlever apres qd on detectera avec les couleurs
 #define VERBOSE_BOTS 0
 
+#define MODELLING 1
+
 static WbDeviceTag left_motor, right_motor;
 static WbDeviceTag ps[NB_SENSORS];
 static WbDeviceTag gps, imu;
@@ -283,7 +285,7 @@ void braitenberg_dodging(double* vL, double* vR)
 	}
 }
 
-void go_to_patrol(double* vL, double* vR, const double* rgbs)
+void go_to_patrol(double* vL, double* vR, const double* rgbs, bool* is_turning, double* time_turning, int* turn_counter, int* pat_counter, double* sum_times)
 {
 	if (has_target) {
 		const double *p = wb_gps_get_values(gps);                // [x, y, z]
@@ -305,17 +307,36 @@ void go_to_patrol(double* vL, double* vR, const double* rgbs)
 
 		*vL += fwd - omega;
 		*vR += fwd + omega;
-		
+
 		if (dist <0.20){
             	if (dist < 0.15){
                 	*vL = 2;
                     *vR = -2;
+					#if MODELLING
+						if (!(*is_turning)){
+							*is_turning= true;
+							*time_turning= wb_robot_get_time();
+							*turn_counter+= 1;
+						}
+					#endif
                 }
                 if (color_arrived(rgbs)) {
+					end_time = wb_robot_get_time();
+          			travel_time = end_time - start_time;
+					#if MODELLING
+						*sum_times+= travel_time;
+						*pat_counter+= 1;
+						if (*is_turning){
+							double turning_time= wb_robot_get_time() - *time_turning;
+							printf("[R%d] Time turning: %f\n", my_id, turning_time);
+							if (turning_time < 3){
+								*turn_counter-=1;
+							}
+							*is_turning= false;
+						}
+					#endif
           			char msg[64];
           			//format of robot to supervisor messages: <r_id> <p_id>
-          			end_time = wb_robot_get_time();
-          			travel_time = end_time - start_time;
           			snprintf(msg, sizeof(msg), "%d %d %d %lf", my_id, target_patrol, last_patrol, travel_time);
           			wb_emitter_send(emitter, msg, strlen(msg) + 1);
           			if (VERBOSE_BOTS){
@@ -331,6 +352,20 @@ void go_to_patrol(double* vL, double* vR, const double* rgbs)
 
 int main() {
 	double* rgbs= initialize();
+
+	// Variables purposed to fit the micro and macro model
+	#if MODELLING
+		double time_turning= 0;
+		bool is_turning= false;
+		int turn_counter= 0;
+		int pat_counter= 0;
+		double sum_times= 0;
+		int dodge_counter= 0;
+		int dodge_steps_counter= 0;
+		bool is_dodging= false;
+		unsigned long long int sum_steps_dodge= 0;
+	#endif
+
 	while ((wb_robot_step(TIME_STEP) != -1) && in_progress) {
 		// Messages entrants
 		receive_patrol(); //assign a target if supervisor sent one
@@ -342,13 +377,31 @@ int main() {
 
 			// Évitement Braitenberg
 			braitenberg_dodging(&vL, &vR);
+			#if MODELLING
+				if ((fabs(vL - BASE_SPEED) > 0.05) || ((fabs(vL - BASE_SPEED) > 0.05))){
+					if (!(is_dodging)){
+						dodge_counter+=1;
+					}
+					is_dodging= true;
+					dodge_steps_counter+=1;
+				}else{
+					is_dodging= false;
+					sum_steps_dodge+= dodge_steps_counter;
+					dodge_steps_counter= 0;
+				}
+			#endif
 
 			// Navigation vers (tx,ty) dans le plan X–Y
-			go_to_patrol(&vL, &vR, rgbs);
+			go_to_patrol(&vL, &vR, rgbs, &is_turning, &time_turning, &turn_counter, &pat_counter, &sum_times);
 		}
 
 		set_speed(vL, vR);
 	}
+	#if MODELLING
+		printf("[R%d] Proba turn: %f\n.", my_id, ((double)turn_counter) / ((double)pat_counter));
+		printf("[R%d] Average number of steps to reach pat: %f.\n", my_id, 1000*sum_times/(pat_counter*TIME_STEP));
+		printf("[R%d] Average number of steps lost in obstacle avoidance: .%f\n", my_id, (double)sum_steps_dodge/(double)dodge_counter);
+	#endif
 
 	free(rgbs);
 	rgbs= NULL;
