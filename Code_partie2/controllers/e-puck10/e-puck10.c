@@ -1,0 +1,924 @@
+#include <webots/robot.h>
+#include <webots/motor.h>
+#include <webots/gps.h>
+#include <webots/inertial_unit.h>
+#include <webots/distance_sensor.h>
+#include <webots/emitter.h>
+#include <webots/receiver.h>
+#include <webots/camera.h>
+
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <float.h>
+#include <time.h>
+
+#define TIME_STEP    32
+#define NB_SENSORS   8
+#define MAX_V        6.28
+#define MAX_SENS     4095.0
+#define VERBOSE_BOTS 0
+#define VERBOSE_COM 0
+
+// ----- TSP / ACO PARAMETERS -----
+#define N_PATROLS    10           // number of patrol points
+#define N_ITERS      10           // number of ACO iterations
+#define BIG_LENGTH   10000.0
+
+#define Q0           0.9
+#define BETA         1.0        // matches supervisor: tau * (d_ij)^BETA
+#define ALPHA        0.1        // pheromone update factor
+#define XI           0.1        // local pheromone update parameter ξ
+
+#define PATH_LEN     (N_PATROLS + 1)   // cycle: N_PATROLS edges, N_PATROLS+1 nodes (return to start)
+
+// ----- COMMUNICATION -----
+#define COMM_RANGE   0.7         // meters
+#define MSG_BUF_LEN  1024
+
+// Devices
+static WbDeviceTag left_motor, right_motor;
+static WbDeviceTag ps[NB_SENSORS];
+static WbDeviceTag gps, imu;
+static WbDeviceTag emitter, receiver;
+static WbDeviceTag cam;
+
+// Robot info
+static int my_id         = -1;
+static int start_node    = 0;    // starting patrol for this robot
+static int target_patrol = -1;
+static int last_patrol   = -1;
+static bool has_target   = false;
+static double tx = 0.0, ty = 0.0;
+static double start_time = 0.0;
+
+// For local-update timing
+static bool just_arrived_edge = false;
+static int edge_from = -1;
+static int edge_to   = -1;
+
+// Braitenberg
+static const double BASE_SPEED = 5.0;
+static const double AVOID_GAIN = 1000.0;
+static const double L_WEIGHT[NB_SENSORS] = { -1.0, -0.8, -0.5,  0.0,  0.0,  0.5,  0.8,  1.0 };
+static const double R_WEIGHT[NB_SENSORS] = {  1.0,  0.8,  0.5,  0.0,  0.0, -0.5, -0.8, -1.0 };
+
+// Go-to-goal
+static const double K_TURN  = 4.0;
+static const double K_FWD   = 2.0;
+static const double FWD_CAP = 0.3;
+
+// ----- CAMERA / COLOR DETECTION -----
+static int cam_w = 0, cam_h = 0;
+static int color_hits = 0;
+static const double TOL_GEN = 10.0;  // hue tolerance in degrees
+static int consistency = 4;          // required consecutive detections
+
+// Hardcoded RGB values of patrol nodes (0..1)
+static const double PATROL_RGB[N_PATROLS][3] = {
+  {1.000, 0.000, 0.000}, // node 0
+  {0.000, 0.333, 1.000}, // node 1
+  {0.000, 0.333, 0.000}, // node 2
+  {1.000, 1.000, 1.000}, // node 3
+  {1.000, 1.000, 0.000}, // node 4
+  {1.000, 0.333, 0.000}, // node 5
+  {0.660, 0.000, 0.330}, // node 6
+  {0.100, 0.800, 1.000}, // node 7
+  {0.000, 1.000, 0.000}, // node 8
+  {0.500, 0.000, 0.666}  // node 9
+};
+
+static double clamp(double v, double lo, double hi) {
+  return v < lo ? lo : (v > hi ? hi : v);
+}
+
+static void set_speed(double vl, double vr) {
+  wb_motor_set_velocity(left_motor,  clamp(vl, -MAX_V, MAX_V));
+  wb_motor_set_velocity(right_motor, clamp(vr, -MAX_V, MAX_V));
+}
+
+// --- ID unique depuis le champ "name", p.ex. "EPUCK3" -> 3
+static int parse_id_from_name(const char *nm) {
+  int id = -1, tmp = -1;
+  for (const char *p = nm; *p; ++p) {
+    if (*p >= '0' && *p <= '9') {
+      if (tmp < 0) tmp = 0;
+      tmp = tmp * 10 + (*p - '0');
+    } else if (tmp >= 0) {
+      id = tmp;
+      tmp = -1;
+    }
+  }
+  if (tmp >= 0) id = tmp;
+  return id;
+}
+
+// ---------- HARD-CODED MAP / INVERTED DISTANCES ----------
+static const double PATROL_X[N_PATROLS] = {
+  -0.1000, 1.6000, -1.7000, -1.5000, 1.3000,
+   0.1000, 1.8000, -1.5000, 1.2000, -0.5000
+};
+static const double PATROL_Y[N_PATROLS] = {
+   0.3000, 0.7500, 0.0000, 1.6000, -1.8000,
+   1.4000, -1.0000, -1.6000, -0.2000, -0.9000
+};
+
+static const double D_INV[N_PATROLS][N_PATROLS] = {
+  {0,       0.0542, 0.0567, 0.0532, 0.0382, 0.0870, 0.0400, 0.0275, 0.0595, 0.0762},
+  {0.0542,  0,      0.0265, 0.0330, 0.0372, 0.0628, 0.0533, 0.0232, 0.1005, 0.0380},
+  {0.0567,  0.0265, 0,      0.0582, 0.0292, 0.0460, 0.0255, 0.0625, 0.0315, 0.0685},
+  {0.0532,  0.0330, 0.0582, 0,      0.0215, 0.0675, 0.0240, 0.0312, 0.0297, 0.0400},
+  {0.0382,  0.0372, 0.0292, 0.0215, 0,      0.0265, 0.1103, 0.0375, 0.0545, 0.0500},
+  {0.0870,  0.0628, 0.0460, 0.0675, 0.0265, 0,      0.0330, 0.0257, 0.0520, 0.0377},
+  {0.0400,  0.0533, 0.0255, 0.0240, 0.1103, 0.0330, 0,      0.0290, 0.1100, 0.0455},
+  {0.0367,  0.0232, 0.0625, 0.0312, 0.0375, 0.0257, 0.0290, 0,      0.0312, 0.0900},
+  {0.0595,  0.1005, 0.0315, 0.0297, 0.0545, 0.0520, 0.1100, 0.0312, 0,      0.0485},
+  {0.0762,  0.0380, 0.0685, 0.0400, 0.0500, 0.0377, 0.0455, 0.0900, 0.0485, 0}
+};
+
+
+// Local pheromone table
+static double pher_table[N_PATROLS][N_PATROLS];
+// History for CSV saving (Initial state + N_ITERS)
+static double pher_history[N_ITERS + 1][N_PATROLS][N_PATROLS];
+
+static double tau0_global = 0.0;  // initial pheromone for local update
+
+// Tours
+typedef struct {
+  int path[PATH_LEN];   // cycle
+  int num_patrols;      // number of nodes in path
+  double length;        // "time" = sum of 1 / d_ij
+} Tour;
+
+static Tour tour_curr;
+
+// ACO iteration state
+static int  current_iter = 0;         // 0..N_ITERS-1
+static bool visited[N_PATROLS];
+static int  visited_count = 0;
+static int  current_node  = 0;
+
+// Per-iteration best info (distributed)
+static double best_len[N_ITERS];
+static int    best_path[N_ITERS][PATH_LEN];
+
+// ---------- CSV SAVING FUNCTION ----------
+
+static void save_pheromone_history_csv(void) {
+  FILE *file = fopen("pheromone_history_distr10.csv", "w");
+  if (file == NULL) {
+    printf("[R%d] Error opening file for writing: pheromone_history_distr10.csv\n", my_id);
+    return;
+  }
+  
+  // Print the patrol positions (X)
+  for (int i = 0; i < N_PATROLS; i++) {
+    fprintf(file, "%.6f", PATROL_X[i]);
+    if (i < N_PATROLS - 1) fprintf(file, ",");
+  }
+  fprintf(file, "\n");
+  
+  // Print the patrol positions (Y)
+  for (int i = 0; i < N_PATROLS; i++) {
+    fprintf(file, "%.6f", PATROL_Y[i]);
+    if (i < N_PATROLS - 1) fprintf(file, ",");
+  }
+  fprintf(file, "\n");
+  
+  // Print the pheromone tables (History)
+  for (int iter = 0; iter <= N_ITERS; ++iter) {
+    for (int i = 0; i < N_PATROLS; ++i) {
+      for (int j = 0; j < N_PATROLS; ++j) {
+        fprintf(file, "%.6f", pher_history[iter][i][j]);
+        if (j < N_PATROLS - 1) {
+          fprintf(file, ",");
+        }
+      }
+      fprintf(file, "\n");
+    }
+  }
+  
+  fclose(file);
+  printf("[R%d] Pheromone history saved to: pheromone_history_distr10.csv\n", my_id);
+}
+
+// ---------- TSP / ACO UTILITIES ----------
+
+static double tour_length(const Tour *t) {
+  double L = 0.0;
+  for (int i = 0; i < t->num_patrols - 1; ++i) {
+    int a = t->path[i];
+    int b = t->path[i + 1];
+    if (D_INV[a][b] > 0.0)
+      L += 1.0 / D_INV[a][b];
+  }
+  return L;
+}
+
+static double compute_L_NN(void) {
+  bool J_access[N_PATROLS];
+  for (int i = 0; i < N_PATROLS; ++i)
+    J_access[i] = true;
+
+  int current = 0;
+  J_access[0] = false;
+
+  double l_nn = 0.0;
+
+  for (int step = 0; step < N_PATROLS - 1; ++step) {
+    double max_inv = 0.0;
+    int next = -1;
+    for (int j = 0; j < N_PATROLS; ++j) {
+      if (J_access[j] && D_INV[current][j] > max_inv) {
+        max_inv = D_INV[current][j];
+        next = j;
+      }
+    }
+    if (next < 0 || max_inv <= 0.0)
+      break;
+    l_nn += 1.0 / max_inv;
+    current = next;
+    J_access[current] = false;
+  }
+
+  if (D_INV[current][0] > 0.0)
+    l_nn += 1.0 / D_INV[current][0];
+
+  return l_nn;
+}
+
+static void init_pheromone_table(void) {
+  double L_NN = compute_L_NN();
+  double tau0 = 1.0 / (N_PATROLS * L_NN);
+  tau0_global = tau0;
+
+  for (int i = 0; i < N_PATROLS; ++i) {
+    for (int j = 0; j < N_PATROLS; ++j) {
+      if (i == j) {
+        pher_table[i][j] = 0.0;
+      } else {
+        pher_table[i][j] = tau0;
+      }
+      pher_history[0][i][j] = pher_table[i][j];
+    }
+  }
+  if (my_id == 0){
+    printf("[R0] L_NN = %.4f, tau0 = %.6f\n", L_NN, tau0);
+  }
+}
+
+static void local_pheromone_update(int from, int to) {
+  if (from < 0 || from >= N_PATROLS || to < 0 || to >= N_PATROLS || from == to)
+    return;
+
+  double *tab_ab = &pher_table[from][to];
+  double *tab_ba = &pher_table[to][from];
+  *tab_ab = (1.0 - XI) * (*tab_ab) + XI * tau0_global;
+  *tab_ba = *tab_ab;
+}
+
+static void apply_pheromone_from_tour(const int *path, double length) {
+
+  double delta = 1.0 / length;
+  for (int i = 0; i < PATH_LEN - 1; ++i) {
+    int a = path[i];
+    int b = path[i + 1];
+    if (a < 0 || a >= N_PATROLS || b < 0 || b >= N_PATROLS)
+      continue;
+    double *tab_ab = &pher_table[a][b];
+    double *tab_ba = &pher_table[b][a];
+    *tab_ab = (1.0 - ALPHA) * (*tab_ab) + ALPHA * delta;
+    *tab_ba = *tab_ab;
+  }
+}
+
+static void reset_visited_and_tour(void) {
+  for (int i = 0; i < N_PATROLS; ++i)
+    visited[i] = false;
+
+  visited_count = 1;
+  current_node  = start_node;
+  visited[start_node] = true;
+
+  tour_curr.num_patrols = 1;
+  tour_curr.path[0] = start_node;
+  tour_curr.length = 0.0;
+
+  last_patrol   = start_node;
+  has_target    = false;
+  target_patrol = -1;
+}
+
+static int choose_next_patrol(void) {
+  if (visited_count >= N_PATROLS)
+    return start_node;
+
+  double q = (double)rand() / (double)RAND_MAX;
+
+  double denom = 0.0;
+  for (int j = 0; j < N_PATROLS; ++j) {
+    if (!visited[j] && D_INV[current_node][j] > 0.0) {
+      double tau = pher_table[current_node][j];
+      double eta = D_INV[current_node][j];
+      denom += tau * pow(eta, BETA);
+    }
+  }
+
+  if (denom <= 0.0) {
+    for (int j = 0; j < N_PATROLS; ++j)
+      if (!visited[j])
+        return j;
+    return start_node;
+  }
+
+  if (q <= Q0) {
+    int best_j = start_node;
+    double best_val = -1.0;
+    for (int j = 0; j < N_PATROLS; ++j) {
+      if (!visited[j] && D_INV[current_node][j] > 0.0) {
+        double tau = pher_table[current_node][j];
+        double eta = D_INV[current_node][j];
+        double val = tau * pow(eta, BETA);
+        if (val > best_val) {
+          best_val = val;
+          best_j = j;
+        }
+      }
+    }
+    return best_j;
+  } else {
+    double r = (double)rand() / (double)RAND_MAX;
+    double cum = 0.0;
+    int last_valid = start_node;
+
+    for (int j = 0; j < N_PATROLS; ++j) {
+      if (!visited[j] && D_INV[current_node][j] > 0.0) {
+        double tau = pher_table[current_node][j];
+        double eta = D_INV[current_node][j];
+        double p = (tau * pow(eta, BETA)) / denom;
+        cum += p;
+        last_valid = j;
+        if (cum >= r)
+          return j;
+      }
+    }
+    return last_valid;
+  }
+}
+
+// ---------- COMMUNICATION (RANGE-CONSTRAINED) ----------
+
+static void broadcast_best_info(void) {
+  const double *p = wb_gps_get_values(gps);
+  double x = p[0];
+  double y = p[1];
+
+  char buf[MSG_BUF_LEN];
+  int offset = snprintf(buf, sizeof(buf), "R %d %d %.3f %.3f %d",
+                        my_id, current_iter, x, y, N_ITERS);
+  if (offset < 0 || offset >= MSG_BUF_LEN)
+    return;
+
+  for (int it = 0; it < N_ITERS && offset < MSG_BUF_LEN - 10; ++it) {
+    offset += snprintf(buf + offset, MSG_BUF_LEN - offset, " %.6f", best_len[it]);
+    if (offset >= MSG_BUF_LEN - 10) break;
+
+    for (int k = 0; k < PATH_LEN && offset < MSG_BUF_LEN - 5; ++k) {
+      offset += snprintf(buf + offset, MSG_BUF_LEN - offset, " %d", best_path[it][k]);
+      if (offset >= MSG_BUF_LEN - 5) break;
+    }
+  }
+
+  wb_emitter_send(emitter, buf, strlen(buf) + 1);
+}
+
+static bool parse_one_iter(const char *p, double *len_out, int *path_out, int *consumed) {
+  int used = 0;
+  int n = 0;
+  double L;
+  if (sscanf(p, " %lf%n", &L, &n) != 1)
+    return false;
+  used += n;
+  p += n;
+
+  for (int i = 0; i < PATH_LEN; ++i) {
+    int v;
+    if (sscanf(p, " %d%n", &v, &n) != 1)
+      return false;
+    path_out[i] = v;
+    used += n;
+    p += n;
+  }
+
+  *len_out = L;
+  *consumed = used;
+  return true;
+}
+
+static void handle_incoming_comm(void) {
+  const double *mypos = wb_gps_get_values(gps);
+  double myx = mypos[0];
+  double myy = mypos[1];
+
+  while (wb_receiver_get_queue_length(receiver) > 0) {
+    const char *msg = wb_receiver_get_data(receiver);
+
+    if (msg[0] == 'R') {
+      int sender, sender_iter, nIters;
+      double sx, sy;
+      int consumed = 0;
+      int n = sscanf(msg, "R %d %d %lf %lf %d%n",
+                     &sender, &sender_iter, &sx, &sy, &nIters, &consumed);
+      if (n == 5 && sender != my_id) {
+        double dx = sx - myx;
+        double dy = sy - myy;
+        double dist = sqrt(dx * dx + dy * dy);
+
+        if (dist <= COMM_RANGE) {
+          const char *p = msg + consumed;
+          int iters_to_read = (nIters < N_ITERS) ? nIters : N_ITERS;
+          int start_index = (current_iter > 0) ? (current_iter - 1) : 0;
+
+          for (int it = 0; it < iters_to_read; ++it) {
+            double L;
+            int tmp_path[PATH_LEN];
+            int used = 0;
+            if (!parse_one_iter(p, &L, tmp_path, &used))
+              break;
+            p += used;
+
+            if (it < start_index)
+              continue;
+
+            if (L < best_len[it]) {
+              best_len[it] = L;
+              for (int k = 0; k < PATH_LEN; ++k)
+                best_path[it][k] = tmp_path[k];
+              
+              if (VERBOSE_COM){
+                printf("[R%d]   -> Adopted better tour for iter %d from R%d (L=%.4f)\n",
+                       my_id, it, sender, L);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    wb_receiver_next_packet(receiver);
+  }
+}
+
+// ---------- COLOR / CAMERA HELPERS ----------
+
+static void rgb_to_hsv(double r, double g, double b, double *h, double *s, double *v) {
+  double max = fmax(r, fmax(g, b)), min = fmin(r, fmin(g, b));
+  double d = max - min;
+  *v = max;
+  *s = (max <= 1e-6) ? 0.0 : d / max;
+  double hh;
+  if (d < 1e-6) hh = 0.0;
+  else if (max == r) hh = fmod(((g - b) / d), 6.0);
+  else if (max == g) hh = ((b - r) / d) + 2.0;
+  else               hh = ((r - g) / d) + 4.0;
+  hh *= 60.0;
+  if (hh < 0.0) hh += 360.0;
+  *h = hh;
+}
+
+static void roi_hsv(double *H, double *S, double *V) {
+  const unsigned char *img = wb_camera_get_image(cam);
+  if (!img || cam_w <= 0 || cam_h <= 0) {
+    *H = *S = *V = 0.0;
+    return;
+  }
+
+  int cx = cam_w / 2;
+  int cy = (3 * cam_h) / 4;
+  int half = 3;
+
+  double Hsum = 0.0, Ssum = 0.0, Vsum = 0.0;
+  int count = 1;
+
+  const double V_BLACK = 0.08;
+
+  for (int y = cy - half; y <= cy + half; ++y) {
+    for (int x = cx - half; x <= cx + half; ++x) {
+      double r = wb_camera_image_get_red(img,   cam_w, x, y) / 255.0;
+      double g = wb_camera_image_get_green(img, cam_w, x, y) / 255.0;
+      double b = wb_camera_image_get_blue(img,  cam_w, x, y) / 255.0;
+
+      double h, s, v;
+      rgb_to_hsv(r, g, b, &h, &s, &v);
+
+      if (v < V_BLACK)
+        continue;
+
+      Hsum += h;
+      Ssum += s;
+      Vsum += v;
+      count++;
+    }
+  }
+
+  *H = Hsum / count;
+  *S = Ssum / count;
+  *V = Vsum / count;
+}
+
+static double hue_dist(double h1, double h2) {
+  double d = fabs(h1 - h2);
+  if (d > 180.0) d = 360.0 - d;
+  return d;
+}
+
+static bool color_arrived(void) {
+  if (target_patrol < 0 || target_patrol >= N_PATROLS)
+    return false;
+
+  double hr, sr, vr;
+  double r = PATROL_RGB[target_patrol][0];
+  double g = PATROL_RGB[target_patrol][1];
+  double b = PATROL_RGB[target_patrol][2];
+
+  rgb_to_hsv(r, g, b, &hr, &sr, &vr);
+
+  double h, s, v;
+  roi_hsv(&h, &s, &v);
+
+  if (hue_dist(h, hr) < TOL_GEN) {
+    color_hits++;
+    return (color_hits >= consistency);
+  } else {
+    color_hits = 0;
+    return false;
+  }
+}
+
+// ---------- MOTION / SENSORS ----------
+
+static void braitenberg_dodging(double *vL, double *vR) {
+  const double *p = wb_gps_get_values(gps);
+  double x = p[0], y = p[1];
+  double dx = tx - x, dy = ty - y;
+  double dist = sqrt(dx * dx + dy * dy);
+
+  for (int i = 0; i < NB_SENSORS; ++i) {
+    double s = wb_distance_sensor_get_value(ps[i]) / MAX_SENS;
+    if (has_target && dist < 0.20 && (i == 3 || i == 4))
+      s = 0.0;
+    *vL += AVOID_GAIN * L_WEIGHT[i] * s;
+    *vR += AVOID_GAIN * R_WEIGHT[i] * s;
+  }
+}
+
+static void go_to_patrol(double *vL, double *vR) {
+  if (!has_target)
+    return;
+
+  const double *p = wb_gps_get_values(gps);
+  const double *r = wb_inertial_unit_get_roll_pitch_yaw(imu);
+
+  double x = p[0], y = p[1];
+  double heading = r[2];
+
+  double dx = tx - x, dy = ty - y;
+  double dist = sqrt(dx * dx + dy * dy);
+
+  double desired = atan2(dy, dx);
+  double err = desired - heading;
+  err = fmod(err + M_PI, 2.0 * M_PI);
+  if (err < 0.0) err += 2.0 * M_PI;
+  err -= M_PI;
+
+  double omega = K_TURN * err;
+  double fwd   = K_FWD * clamp(dist, 0.0, FWD_CAP);
+
+  *vL += fwd - omega;
+  *vR += fwd + omega;
+
+
+  if (dist < 0.20) {
+    if (dist < 0.15) {
+      *vL = 2.0;
+      *vR = -2.0;
+    }
+    if (color_arrived()) {
+      has_target = false;
+      last_patrol = target_patrol;
+      just_arrived_edge = true;
+      if (VERBOSE_BOTS) {
+        printf("[R%d] Arrived at patrol %d (color-based)\n", my_id, target_patrol);
+      }
+    }
+  }
+}
+
+// ---------- INITIALISATION ----------
+
+static void camera_init(void) {
+  cam = wb_robot_get_device("camera");
+  if (cam) {
+    wb_camera_enable(cam, TIME_STEP);
+    cam_w = wb_camera_get_width(cam);
+    cam_h = wb_camera_get_height(cam);
+  }
+}
+
+static void initialize(void) {
+  wb_robot_init();
+
+  const char *nm = wb_robot_get_name();
+  my_id = parse_id_from_name(nm);
+  if (my_id < 0) {
+    fprintf(stderr, "[%s] ERROR: robot name must end with an integer, e.g. EPUCK0\n", nm);
+    my_id = 0;
+  }
+
+  srand((unsigned int)time(NULL) + my_id * 12345);
+
+  left_motor  = wb_robot_get_device("left wheel motor");
+  right_motor = wb_robot_get_device("right wheel motor");
+  wb_motor_set_position(left_motor, INFINITY);
+  wb_motor_set_position(right_motor, INFINITY);
+  wb_motor_set_velocity(left_motor, 0.0);
+  wb_motor_set_velocity(right_motor, 0.0);
+
+  char name[8] = "ps0";
+  for (int i = 0; i < NB_SENSORS; ++i) {
+    ps[i] = wb_robot_get_device(name);
+    wb_distance_sensor_enable(ps[i], TIME_STEP);
+    name[2]++;
+  }
+
+  gps = wb_robot_get_device("gps");
+  imu = wb_robot_get_device("inertial unit");
+  wb_gps_enable(gps, TIME_STEP);
+  wb_inertial_unit_enable(imu, TIME_STEP);
+
+  emitter  = wb_robot_get_device("emitter");
+  receiver = wb_robot_get_device("receiver");
+  wb_receiver_enable(receiver, TIME_STEP);
+
+  // Camera
+  camera_init();
+
+  init_pheromone_table();
+
+  for (int it = 0; it < N_ITERS; ++it) {
+    best_len[it] = BIG_LENGTH;
+    for (int k = 0; k < PATH_LEN; ++k)
+      best_path[it][k] = 0;
+  }
+
+  start_node = my_id % N_PATROLS;
+
+  current_iter = 0;
+  reset_visited_and_tour();
+}
+
+
+double compute_length_path(const int* path, int n_patrols)
+{
+	double retour=0;
+	for (int i= 0; i < N_PATROLS; ++i){
+		retour+= 1.0/(D_INV[path[i]][path[i+1]]);
+	}
+	return retour;
+}
+
+double brute_force_10_nodes_solution(int n_patrols, int* best_path)
+{
+    int test_path[n_patrols + 1];
+    test_path[0] = 0;
+    test_path[n_patrols] = 0;
+
+    double best_length = DBL_MAX;
+
+    for (int i = 1; i < n_patrols; ++i) {
+        test_path[1] = i;
+        for (int j = 1; j < n_patrols; ++j) {
+            if (i != j) {
+                test_path[2] = j;
+                for (int k = 1; k < n_patrols; ++k) {
+                    if ((k != i) && (k != j)) {
+                        test_path[3] = k;
+                        for (int l = 1; l < n_patrols; ++l) {
+                            if ((l != i) && (l != j) && (l != k)) {
+                                test_path[4] = l;
+                                for (int m = 1; m < n_patrols; ++m) {
+                                    if ((m != i) && (m != j) && (m != k) && (m != l)) {
+                                        test_path[5] = m;
+                                        for (int n = 1; n < n_patrols; ++n) {
+                                            if ((n != i) && (n != j) && (n != k) && (n != l) && (n != m)) {
+                                                test_path[6] = n;
+                                                for (int o = 1; o < n_patrols; ++o) {
+                                                    if ((o != i) && (o != j) && (o != k) && (o != l) && (o != m) && (o != n)) {
+                                                        test_path[7] = o;
+                                                        for (int p = 1; p < n_patrols; ++p) {
+                                                            if ((p != i) && (p != j) && (p != k) && (p != l) && (p != m) && (p != n) && (p != o)) {
+                                                                test_path[8] = p;
+                                                                for (int q = 1; q < n_patrols; ++q) {
+                                                                    if ((q != i) && (q != j) && (q != k) && (q != l) && (q != m) && (q != n) && (q != o) && (q != p)) {
+                                                                        test_path[9] = q;
+                                                                        double test_length = compute_length_path(test_path, n_patrols);
+                                                                        if (test_length < best_length) {
+                                                                            best_length = test_length;
+                                                                            memcpy(best_path, test_path, (n_patrols + 1) * sizeof(int));
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+      return best_length;
+}
+
+static void print_global_best_tour(void) {
+
+  double best = BIG_LENGTH;
+  int best_it = -1;
+
+  for (int it = 0; it < N_ITERS; ++it) {
+    if (best_len[it] < best) {
+      best = best_len[it];
+      best_it = it;
+    }
+  }
+
+  if (best_it < 0 || best >= BIG_LENGTH) {
+    printf("[R0] No valid best tour found.\n");
+    return;
+  }
+
+  // Rotate display so it starts at node 0 if present in the cycle
+  int start_idx = 0;
+  for (int i = 0; i < N_PATROLS; ++i) {
+    if (best_path[best_it][i] == 0) {
+      start_idx = i;
+      break;
+    }
+  }
+
+  printf("[R0] The best tour was found in iteration %d. This tour is: %d",
+         best_it + 1, best_path[best_it][start_idx]);
+
+  for (int s = 1; s < N_PATROLS; ++s) {
+    int idx = (start_idx + s) % N_PATROLS; // wrap only over the N_PATROLS unique nodes
+    printf("->%d", best_path[best_it][idx]);
+  }
+  printf("->%d", best_path[best_it][start_idx]);
+  printf(" of length: %.3f.\n", best);
+}
+
+// ---------- MAIN LOOP ----------
+
+int main(void) {
+  initialize();
+  
+  int optimal_path[N_PATROLS + 1];
+  double optimal_length;
+  if (my_id == 0) {
+    optimal_length = brute_force_10_nodes_solution(N_PATROLS, optimal_path);
+    printf("The optimal tour has length: %.3f\n", optimal_length);
+  }
+  while (wb_robot_step(TIME_STEP) != -1) {
+    broadcast_best_info();
+    handle_incoming_comm();
+
+    double vL = 0.0, vR = 0.0;
+
+    if (has_target) {
+      vL = BASE_SPEED;
+      vR = BASE_SPEED;
+      braitenberg_dodging(&vL, &vR);
+      go_to_patrol(&vL, &vR);
+    }
+
+    if (just_arrived_edge) {
+      local_pheromone_update(edge_from, edge_to);
+      just_arrived_edge = false;
+    }
+
+    if (!has_target) {
+      bool tour_closed =
+        (current_node == start_node &&
+         tour_curr.num_patrols == PATH_LEN);
+
+      if (tour_closed) {
+        tour_curr.length = tour_length(&tour_curr);
+        if (VERBOSE_COM){
+          printf("[R%d] Finished tour %d: L = %.4f\n",
+                 my_id, current_iter, tour_curr.length);
+        }
+        
+        if (tour_curr.length < best_len[current_iter]) {
+          best_len[current_iter] = tour_curr.length;
+          for (int k = 0; k < PATH_LEN; ++k)
+            best_path[current_iter][k] = tour_curr.path[k];
+          
+          if (VERBOSE_COM){
+            printf("[R%d]   -> New local best for iter %d (L=%.4f)\n",
+                   my_id, current_iter, tour_curr.length);
+          }
+        }
+
+        if (current_iter > 0 && best_len[current_iter - 1] < BIG_LENGTH) {
+          apply_pheromone_from_tour(best_path[current_iter - 1],
+                                    best_len[current_iter - 1]);
+          if (VERBOSE_COM){
+            printf("[R%d]   -> Applied pheromone from best iter %d (L=%.4f)\n",
+                   my_id, current_iter - 1, best_len[current_iter - 1]);
+          }
+        }
+
+        if (current_iter < N_ITERS) {
+           for (int i = 0; i < N_PATROLS; ++i) {
+             for (int j = 0; j < N_PATROLS; ++j) {
+               pher_history[current_iter + 1][i][j] = pher_table[i][j];
+             }
+           }
+        }
+
+        current_iter++;
+        if (current_iter >= N_ITERS) {
+          set_speed(0.0, 0.0);
+          
+          if (my_id == 0) {
+              save_pheromone_history_csv();
+          }
+          
+          break;
+        }
+
+        reset_visited_and_tour();
+      }
+
+      if (current_iter < N_ITERS) {
+        if (visited_count < N_PATROLS) {
+          int next = choose_next_patrol();
+          visited[next] = true;
+          visited_count++;
+          tour_curr.path[tour_curr.num_patrols++] = next;
+          current_node = next;
+
+          edge_from = last_patrol;
+          edge_to   = next;
+
+          tx = PATROL_X[next];
+          ty = PATROL_Y[next];
+          target_patrol = next;
+          has_target = true;
+          start_time = wb_robot_get_time();
+
+          if (VERBOSE_BOTS) {
+            printf("[R%d] Iter %d: going to patrol %d\n",
+                   my_id, current_iter, next);
+          }
+        } else if (visited_count == N_PATROLS && current_node != start_node) {
+          int next = start_node;
+          tour_curr.path[tour_curr.num_patrols++] = next;
+          current_node = next;
+
+          edge_from = last_patrol;
+          edge_to   = next;
+
+          tx = PATROL_X[next];
+          ty = PATROL_Y[next];
+          target_patrol = next;
+          has_target = true;
+          start_time = wb_robot_get_time();
+
+          if (VERBOSE_BOTS) {
+            printf("[R%d] Iter %d: returning to start\n",
+                   my_id, current_iter);
+          }
+        }
+      }
+    }
+
+    set_speed(vL, vR);
+  }
+
+  if (my_id==0){
+    print_global_best_tour();
+  }
+  
+  wb_robot_cleanup();
+  return 0;
+}
